@@ -74,7 +74,7 @@ def test_azure_sdk_ingestion():
     finally:
         # Clean up temp files if they exist
         try:
-            from spark_jobs.bronze_ingest.azure_downloader import AzureDataDownloader
+            from spark_jobs.bronze_ingest.download_and_ingest import AzureDataDownloader
             from configs.azure_config import load_azure_config_from_env
             config = load_azure_config_from_env()
             downloader = AzureDataDownloader(

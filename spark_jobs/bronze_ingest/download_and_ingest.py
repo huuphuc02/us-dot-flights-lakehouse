@@ -211,11 +211,11 @@ def ingest_to_bronze_with_azure_sdk(spark: SparkSession, year: int, month: str, 
         .withColumn("source_file", lit(f"T_ONTIME_FLIGHT_REPORTING_{month}_{year}.csv"))\
         .withColumn("partition_date", col("FL_DATE").cast("date"))
     
-    # df_with_metadata.write\
-    #     .format("delta")\
-    #     .mode("overwrite")\
-    #     .option("overwriteSchema", "true")\
-    #     .partitionBy("partition_date")\
-    #     .save(bronze_output_path)
+    df_with_metadata.write\
+        .format("delta")\
+        .mode("append")\
+        .option("overwriteSchema", "true")\
+        .partitionBy("partition_date")\
+        .save(bronze_output_path)
 
     return df_with_metadata
