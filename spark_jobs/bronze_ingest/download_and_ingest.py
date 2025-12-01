@@ -1,111 +1,73 @@
-import os
-import tempfile
-from azure.identity import DefaultAzureCredential, ClientSecretCredential
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, current_timestamp, lit
+from pyspark.sql.functions import col, current_timestamp
 from configs.data_schema import FLIGHT_DATA_SCHEMA
 
-class AzureDataDownloader:
-    """Download data from Azure Data Lake using Azure SDK"""
+
+class AzureDataLoader:
+    """Load data directly from Azure Data Lake using Spark's native support"""
     
-    def __init__(self, storage_account_name: str, container_name: str, 
-                 account_key: str = None, tenant_id: str = None, 
-                 client_id: str = None, client_secret: str = None):
-        self.storage_account_name = storage_account_name
-        self.container_name = container_name
-        self.account_key = account_key
-        self.tenant_id = tenant_id
-        self.client_id = client_id
-        self.client_secret = client_secret
+    def __init__(self, spark: SparkSession, config):
+        """
+        Initialize Azure Data Loader
         
-        # Initialize Azure client
-        self.service_client = self._get_service_client()
+        Args:
+            spark: SparkSession configured for Azure access
+            config: AzureConfig object with connection details
+        """
+        self.spark = spark
+        self.config = config
+        self.base_path = f"abfss://{config.container_name}@{config.storage_account_name}.dfs.core.windows.net"
     
-    def _get_service_client(self):
-        """Get Azure Data Lake service client"""
-        account_url = f"https://{self.storage_account_name}.dfs.core.windows.net"
+    def get_azure_paths(self):
+        """Get Azure Data Lake paths for data sources"""
+        return {
+            "flights": f"{self.base_path}/sources/flights",
+            "airports": f"{self.base_path}/sources/lookup/L_AIRPORT_ID.csv",
+            "carriers": f"{self.base_path}/sources/lookup/L_UNIQUE_CARRIERS.csv",
+            "bronze": f"{self.base_path}/bronze",
+            "silver": f"{self.base_path}/silver",
+            "gold": f"{self.base_path}/gold"
+        }
+    
+    def load_flight_data_from_azure(self):
+        """
+        Load flight data directly from Azure Data Lake using Spark
         
-        if self.account_key:
-            # Use account key authentication
-            from azure.storage.filedatalake import DataLakeServiceClient
-            return DataLakeServiceClient(account_url=account_url, credential=self.account_key)
-        else:
-            # Use OAuth authentication
-            if self.client_id and self.client_secret and self.tenant_id:
-                credential = ClientSecretCredential(
-                    tenant_id=self.tenant_id,
-                    client_id=self.client_id,
-                    client_secret=self.client_secret
-                )
-            else:
-                credential = DefaultAzureCredential()
-            
-            return DataLakeServiceClient(account_url=account_url, credential=credential)
-    
-    def download_file_to_local(self, remote_path: str, local_path: str = None):
-        """Download file from Azure Data Lake to local filesystem"""
-        if local_path is None:
-            local_path = tempfile.mktemp(suffix=".csv")
-        
+        Returns:
+            DataFrame: Enriched flight data with airport and carrier names
+        """
         try:
-            file_system_client = self.service_client.get_file_system_client(file_system=self.container_name)
-            file_client = file_system_client.get_file_client(file_path=remote_path)
+            paths = self.get_azure_paths()
             
-            with open(local_path, "wb") as local_file:
-                download = file_client.download_file()
-                local_file.write(download.readall())
+            print(f"Reading flight data from: {paths['flights']}")
+            print(f"Reading airport lookup from: {paths['airports']}")
+            print(f"Reading carrier lookup from: {paths['carriers']}")
             
-            print(f"Downloaded {remote_path} to {local_path}")
-            return local_path
-            
-        except Exception as e:
-            print(f"Error downloading {remote_path}: {e}")
-            return None
-    
-    def list_files(self, path: str):
-        """List files in Azure Data Lake path"""
-        try:
-            file_system_client = self.service_client.get_file_system_client(file_system=self.container_name)
-            paths = file_system_client.get_paths(path=path)
-            return [path.name for path in paths if not path.is_directory]
-        except Exception as e:
-            print(f"Error listing files: {e}")
-            return []
-    
-    def load_flight_data_with_azure_sdk(self, spark: SparkSession, year: int, month: int):
-        """Load flight data using Azure SDK"""
-        temp_dir = None
-        try:
-            # Define paths
-            flight_path = f"bronze/flights/{year}/{month}/T_ONTIME_FLIGHT_REPORTING_{month.upper()}_{year}.csv"
-            airport_path = "bronze/lookup/L_AIRPORT_ID.csv"
-            carrier_path = "bronze/lookup/L_UNIQUE_CARRIERS.csv"
-            
-            # Download files to local temp directory
-            temp_dir = tempfile.mkdtemp()
-            flight_file = self.download_file_to_local(flight_path, os.path.join(temp_dir, "flights.csv"))
-            airport_file = self.download_file_to_local(airport_path, os.path.join(temp_dir, "airports.csv"))
-            carrier_file = self.download_file_to_local(carrier_path, os.path.join(temp_dir, "carriers.csv"))
-            
-            if not all([flight_file, airport_file, carrier_file]):
-                print("Failed to download some files from Azure")
-                return None
-            
-            # Load data using Spark with local files
-            data = (spark.read
+            # Read flight data directly from Azure using Spark
+            data = (self.spark.read
                     .option("header", "true")
                     .option("timestampFormat", "M/d/yyyy hh:mm:ss a")
                     .schema(FLIGHT_DATA_SCHEMA)
-                    .csv(flight_file))
+                    .csv(paths['flights']))
             
-            airport_lookup = spark.read.option("header", "true").csv(airport_file)
-            carrier_lookup = spark.read.option("header", "true").csv(carrier_file)
+            # Read lookup tables directly from Azure
+            airport_lookup = (self.spark.read
+                             .option("header", "true")
+                             .csv(paths['airports']))
             
-            # Cache lookup tables
+            carrier_lookup = (self.spark.read
+                             .option("header", "true")
+                             .csv(paths['carriers']))
+            
+            # Cache lookup tables for better performance
             airport_lookup.cache()
             carrier_lookup.cache()
             
-            # Perform joins
+            print(f"Flight data records: {data.count():,}")
+            print(f"Airport lookup records: {airport_lookup.count():,}")
+            print(f"Carrier lookup records: {carrier_lookup.count():,}")
+            
+            # Perform joins to enrich flight data
             df = (data
                   .join(airport_lookup, data.ORIGIN_AIRPORT_ID == airport_lookup.Code, "left")
                   .withColumnRenamed("Description", "ORIGIN_AIRPORT_NAME")
@@ -117,99 +79,50 @@ class AzureDataDownloader:
                   .withColumnRenamed("Description", "CARRIER_NAME")
                   .drop("Code"))
             
-            print(f"Successfully loaded {df.count():,} records from Azure (via SDK)")
+            print(f"Successfully loaded and enriched {df.count():,} records from Azure")
             return df
             
         except Exception as e:
-            print(f"Error loading from Azure: {e}")
+            print(f"Error loading data from Azure: {e}")
+            import traceback
+            traceback.print_exc()
             return None
-        # Note: Don't clean up temp files here - let them persist until Spark job completes
-        # Store temp_dir for later cleanup
-        self._temp_dir = temp_dir
-    
-    def cleanup_temp_files(self):
-        """Clean up temporary files after Spark job completes"""
-        if hasattr(self, '_temp_dir') and self._temp_dir:
-            try:
-                import shutil
-                shutil.rmtree(self._temp_dir)
-                print(f"Cleaned up temp directory: {self._temp_dir}")
-            except Exception as e:
-                print(f"Error cleaning up temp files: {e}")
-    
-    def upload_local_delta_to_azure(self, local_delta_path: str, azure_delta_path: str):
-        """Upload local Delta table to Azure Data Lake"""
-        try:
-            import shutil
-            import os
-            
-            # Create Azure path
-            azure_path_parts = azure_delta_path.replace("abfss://", "").split("/")
-            container_name = azure_path_parts[0].split("@")[0]
-            storage_account = azure_path_parts[0].split("@")[1].split(".")[0]
-            azure_folder = "/".join(azure_path_parts[1:])
-            
-            print(f"Uploading Delta table from {local_delta_path} to Azure {azure_folder}")
-            
-            # Get file system client
-            file_system_client = self.service_client.get_file_system_client(file_system=container_name)
-            
-            # Upload all files in the Delta table directory
-            for root, dirs, files in os.walk(local_delta_path):
-                for file in files:
-                    local_file_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(local_file_path, local_delta_path)
-                    azure_file_path = f"{azure_folder}/{relative_path}".replace("\\", "/")
-                    
-                    # Create directory if needed
-                    azure_dir = "/".join(azure_file_path.split("/")[:-1])
-                    if azure_dir:
-                        try:
-                            file_system_client.create_directory(azure_dir)
-                        except:
-                            pass  # Directory might already exist
-                    
-                    # Upload file
-                    file_client = file_system_client.get_file_client(file_path=azure_file_path)
-                    with open(local_file_path, "rb") as data:
-                        file_client.upload_data(data, overwrite=True)
-                    
-                    print(f"Uploaded: {azure_file_path}")
-            
-            print(f"Successfully uploaded Delta table to Azure: {azure_delta_path}")
-            return True
-            
-        except Exception as e:
-            print(f"Error uploading Delta table to Azure: {e}")
-            return False
 
-def ingest_to_bronze_with_azure_sdk(spark: SparkSession, year: int, month: str, bronze_output_path: str):
-    """Ingest data using Azure SDK approach"""
-    from configs.azure_config import load_azure_config_from_env
+def ingest_to_bronze_from_azure(spark: SparkSession, bronze_output_path: str):
+    """
+    Ingest data directly from Azure Data Lake to Bronze layer
+    
+    Args:
+        spark: SparkSession configured for Azure access
+        bronze_output_path: Path to write bronze Delta table
+    
+    Returns:
+        DataFrame: Ingested data with metadata
+    """
+    from configs.azure_config import load_azure_config_from_env, configure_spark_for_azure
     
     # Load Azure configuration
     config = load_azure_config_from_env()
     
-    # Create Azure downloader
-    downloader = AzureDataDownloader(
-        storage_account_name=config.storage_account_name,
-        container_name=config.container_name,
-        account_key=config.account_key,
-        tenant_id=config.tenant_id,
-        client_id=config.client_id,
-        client_secret=config.client_secret
-    )
+    # Configure Spark for Azure access (if not already configured)
+    configure_spark_for_azure(spark, config)
     
-    # Load data using Azure SDK
-    df = downloader.load_flight_data_with_azure_sdk(spark, year, month)
+    # Create Azure data loader
+    loader = AzureDataLoader(spark, config)
+    
+    # Load data directly from Azure using Spark
+    df = loader.load_flight_data_from_azure()
     
     if df is None:
-        raise ValueError(f"Failed to load data for {month} {year}")
+        raise ValueError("Failed to load data from Azure")
     
-    # Add metadata and write to Delta
-    df_with_metadata = df.withColumn("ingestion_timestamp", current_timestamp())\
-        .withColumn("source_file", lit(f"T_ONTIME_FLIGHT_REPORTING_{month}_{year}.csv"))\
-        .withColumn("partition_date", col("FL_DATE").cast("date"))
+    # Add metadata columns
+    df_with_metadata = (df
+                        .withColumn("ingestion_timestamp", current_timestamp())
+                        .withColumn("partition_date", col("FL_DATE").cast("date")))
+    
+    # Write to Delta table
+    print(f"Writing {df_with_metadata.count():,} records to bronze layer: {bronze_output_path}")
     
     df_with_metadata.write\
         .format("delta")\
@@ -217,5 +130,42 @@ def ingest_to_bronze_with_azure_sdk(spark: SparkSession, year: int, month: str, 
         .option("overwriteSchema", "true")\
         .partitionBy("partition_date")\
         .save(bronze_output_path)
-
+    
+    print(f"Successfully ingested data to bronze layer")
     return df_with_metadata
+
+def setup_autoloader_stream(spark: SparkSession, source_path: str, checkpoint_path: str, output_path: str):
+    """Setup Autoloader for incremental file processing"""
+    df = spark.readStream\
+        .format("cloudFiles")\
+            .option("cloudFiles.format", "csv")\
+                .option("cloudFiles.schemaLocation", checkpoint_path)\
+                    .option("cloudFiles.schemaEvolutionMode", "addNewColumns")\
+                        .option("cloudFiles.includeExistingFiles", "false")\
+                            .option("cloudFiles.validateOptions", "true")\
+                                .option("header", "true")\
+                                    .option("timestampFormat", "M/d/yyyy hh:mm:ss a")\
+                                        .schema(FLIGHT_DATA_SCHEMA)\
+                                            .load(source_path)
+
+    return df
+
+def run_autoloader_ingestion(spark: SparkSession, source_path: str, checkpoint_path: str, output_path: str):
+    """Run ingestion using Autoloader approach"""
+    df = setup_autoloader_stream(spark, source_path, checkpoint_path, output_path)
+
+    from pyspark.sql.functions import input_file_name
+
+    df_with_metadata = df.withColumn("ingestion_timestamp", current_timestamp())\
+        .withColumn("source_file", input_file_name())\
+        .withColumn("partition_date", col("FL_DATE").cast("date"))
+
+    query = df_with_metadata.writeStream\
+        .format("delta")\
+            .option("checkpointLocation", checkpoint_path)\
+                .option("mergeSchema", "true")\
+                    .outputMode("append")\
+                        .trigger(once=True)\
+                            .start(output_path)
+
+    return query

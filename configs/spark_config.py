@@ -44,6 +44,12 @@ def create_spark_session(app_name="US_DOT_Flights_Exploration",
         conf.set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         conf.set("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
     
+    # Legacy time parser for malformed datetime strings
+    conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+    
+    # Set timezone to UTC for consistent datetime handling across environments
+    conf.set("spark.sql.session.timeZone", "UTC")
+    
     # Memory management
     conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
     conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "10000")

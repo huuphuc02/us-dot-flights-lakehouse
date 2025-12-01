@@ -76,6 +76,13 @@ def configure_spark_for_azure(spark: SparkSession, config: AzureConfig):
         spark.conf.set(f"fs.azure.account.oauth2.client.endpoint.{config.storage_account_name}.dfs.core.windows.net", f"https://login.microsoftonline.com/{config.tenant_id}/oauth2/token")
         spark.conf.set("fs.azure.account.auth.type", "OAuth")
     
+    # Workaround for BlobStorageEvents/SoftDelete compatibility issue
+    # Disable hierarchical namespace checks to avoid ACL operations
+    spark.conf.set(f"fs.azure.account.hns.enabled.{config.storage_account_name}.dfs.core.windows.net", "false")
+    
+    # Skip ownership and permission checks
+    spark.conf.set(f"fs.azure.skipUserGroupMetadataCheck.{config.storage_account_name}.dfs.core.windows.net", "true")
+    
     return spark
 
 def create_spark_session_with_azure(app_name: str, azure_config: AzureConfig, master: str = "local[*]", memory: str = "4g"):
@@ -89,17 +96,24 @@ def create_spark_session_with_azure(app_name: str, azure_config: AzureConfig, ma
                .config("spark.driver.memory", memory)
                .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
                .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-               .config("spark.jars.packages", 
-                       "org.apache.hadoop:hadoop-azure:3.3.6"))
+               .config("spark.sql.legacy.timeParserPolicy", "LEGACY")
+               # Set timezone to UTC for consistent datetime handling
+               .config("spark.sql.session.timeZone", "UTC")
+               .config("spark.jars",
+                "/Users/phuchuu/Desktop/libs/hadoop-azure-3.3.1.jar,"
+                "/Users/phuchuu/Desktop/libs/azure-storage-8.6.6.jar")
+               # Azure compatibility settings
+               .config(f"fs.azure.account.hns.enabled.{azure_config.storage_account_name}.dfs.core.windows.net", "false")
+               .config(f"fs.azure.skipUserGroupMetadataCheck.{azure_config.storage_account_name}.dfs.core.windows.net", "true"))
     
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
     
-    # Configure Azure after session creation
+    # Configure Azure authentication after session creation
     configure_spark_for_azure(spark, azure_config)
     
     return spark
 
-def get_azure_data_paths(config: AzureConfig, year: int, month: int) -> dict:
+def get_azure_data_paths(config: AzureConfig) -> dict:
     """Get Azure Data Lake paths for flight data"""
     base_path = f"abfss://{config.container_name}@{config.storage_account_name}.dfs.core.windows.net"
     
@@ -107,11 +121,9 @@ def get_azure_data_paths(config: AzureConfig, year: int, month: int) -> dict:
         "bronze": f"{base_path}/bronze",
         "silver": f"{base_path}/silver", 
         "gold": f"{base_path}/gold",
-        "raw_flights": f"{base_path}/bronze/flights/{year}/{month}",
-        "airports": f"{base_path}/bronze/lookup/L_AIRPORT_ID.csv",
-        "carriers": f"{base_path}/bronze/lookup/L_UNIQUE_CARRIERS.csv",
-        "year": year,
-        "month": month
+        "raw_flights": f"{base_path}/source/flights",
+        "airports": f"{base_path}/source/lookup/L_AIRPORT_ID.csv",
+        "carriers": f"{base_path}/source/lookup/L_UNIQUE_CARRIERS.csv",
     }
 
 def list_azure_files(config: AzureConfig, path: str) -> list:
