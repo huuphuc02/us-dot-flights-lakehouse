@@ -44,7 +44,7 @@ class FlightDataEnricher:
         print("Adding performance metrics")
 
         df_performance = df.withColumn(
-            "SPEED_KM/H",
+            "SPEED_KM_H",
             when(col("DISTANCE_KM").isNotNull() & col("AIR_TIME_CLEAN").isNotNull(),
             col("DISTANCE_KM") / col("AIR_TIME_CLEAN") * 60).otherwise(None)
         )

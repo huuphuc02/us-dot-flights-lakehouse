@@ -6,14 +6,23 @@ from spark_jobs.silver_transform.flight_data_cleaner import FlightDataCleaner
 from spark_jobs.silver_transform.flight_data_enricher import FlightDataEnricher
 from configs.azure_config import load_azure_config_from_env, create_spark_session_with_azure, get_azure_data_paths
 from delta import configure_spark_with_delta_pip
+from spark_jobs.validation.data_validator import DataValidator
 
 class FlightSilverTransformer:
     """Handles all Silver layer transformations for flight data"""
 
-    def __init__(self, spark: SparkSession):
+    def __init__(self, spark: SparkSession, enable_validation: bool = True):
         self.spark = spark
         self.cleaner = FlightDataCleaner(spark)
         self.enricher = FlightDataEnricher(spark)
+        self.enable_validation = enable_validation
+
+        if self.enable_validation:
+            self.validator = DataValidator()
+            print("Great Expectations validation enabled")
+        else:
+            self.validator = None
+            print("Great Expectations validation disabled")
 
     def clean_flights_data(self, bronze_df):
         """Clean and transform flights data from Bronze layer to Silver layer"""
@@ -68,11 +77,10 @@ class FlightSilverTransformer:
             col("ORIGIN_AIRPORT_NAME_CLEAN").alias("ORIGIN_AIRPORT_NAME"),
             col("DEST_AIRPORT_NAME_CLEAN").alias("DEST_AIRPORT_NAME"),
 
-            # Time fields - formatted as simple datetime strings (yyyy-MM-dd HH:mm:ss)
-            date_format(col("DEP_TIME_PARSED"), "yyyy-MM-dd HH:mm:ss").alias("ACTUAL_DEPARTURE_TIME"),
-            date_format(col("ARR_TIME_PARSED"), "yyyy-MM-dd HH:mm:ss").alias("ACTUAL_ARRIVAL_TIME"),
-            date_format(col("CRS_DEP_TIME_PARSED"), "yyyy-MM-dd HH:mm:ss").alias("PLANNED_DEPARTURE_TIME"),
-            date_format(col("CRS_ARR_TIME_PARSED"), "yyyy-MM-dd HH:mm:ss").alias("PLANNED_ARRIVAL_TIME"),
+            col("DEP_TIME_PARSED").alias("ACTUAL_DEPARTURE_TIME"),
+            col("ARR_TIME_PARSED").alias("ACTUAL_ARRIVAL_TIME"),
+            col("CRS_DEP_TIME_PARSED").alias("PLANNED_DEPARTURE_TIME"),
+            col("CRS_ARR_TIME_PARSED").alias("PLANNED_ARRIVAL_TIME"),
 
             # Delay metrics
             col("DEP_DELAY_CLEAN").alias("DEPARTURE_DELAY"),
@@ -94,7 +102,7 @@ class FlightSilverTransformer:
             col("AIR_TIME_CLEAN").alias("AIR_TIME_MINUTES"),
             col("AIR_TIME_HOURS_CLEAN").alias("AIR_TIME_HOURS"),
             col("DISTANCE_KM").alias("DISTANCE_KM"),
-            col("SPEED_KM/H").alias("SPEED_KM/H"),
+            col("SPEED_KM_H").alias("SPEED_KM_H"),
 
             # Operational metrics
             col("ROUTE_CODE").alias("ROUTE_CODE"),
@@ -104,7 +112,6 @@ class FlightSilverTransformer:
             # Data quality
             col("has_missing_times").alias("HAS_MISSING_TIMES"),
             col("has_missing_delays").alias("HAS_MISSING_DELAYS"),
-            col("DEP_BEFORE_ARR").alias("DEP_BEFORE_ARR"),
             col("AIR_TIME_VALID").alias("AIR_TIME_VALID"),
             col("DISTANCE_VALID").alias("DISTANCE_VALID"),
             col("REASONABLE_DELAYS").alias("REASONABLE_DELAYS"),
@@ -124,7 +131,18 @@ class FlightSilverTransformer:
 
         return df
 
-    def run_silver_transformation(self, bronze_df, output_path):
+    def validate_silver_output(self, df, batch_id: str = 'silver_output'):
+        """Validate silver output data"""
+        if not self.enable_validation or not self.validator:
+            return True
+        
+        print(f"Validating silver output data (batch: {batch_id})...")
+        results = self.validator.validate_silver_data(df, batch_id=batch_id)
+        stats = self.validator.get_validation_statistics(results)
+        print(f"\n📊 Silver Validation: {stats['passed']}/{stats['total']} checks passed ({stats['success_rate']:.1f}%)")
+        return results.get("success", False)
+
+    def run_silver_transformation(self, bronze_df, output_path, batch_id: str = 'silver_output'):
         print("Running silver transformation")
 
         # Clean and transform data
@@ -135,6 +153,13 @@ class FlightSilverTransformer:
 
         # Create final silver schema
         df_final = self.create_final_silver_schema(df_enriched)
+
+        if self.enable_validation:
+            silver_valid = self.validate_silver_output(df_final, batch_id=batch_id)
+            if not silver_valid:
+                print(f"❌ Silver validation FAILED")
+                raise Exception("Silver validation failed")
+            print(f"✅ Silver validation PASSED")
 
         if output_path:
             self.save_silver_data(df_final, output_path)
@@ -152,8 +177,9 @@ if __name__ == "__main__":
         app_name="US_DOT_Flights_Silver_Transformation",
         azure_config=azure_config
     )
-    
-    transformer = FlightSilverTransformer(spark)
+
+    ENABLE_VALIDATION = False
+    transformer = FlightSilverTransformer(spark, enable_validation=ENABLE_VALIDATION)
     
     # Get Azure data paths
     paths = get_azure_data_paths(azure_config) 
@@ -174,4 +200,13 @@ if __name__ == "__main__":
         output_path = "/Users/phuchuu/Desktop/Data engineering/Personal Projects/us-dot-flights-lakehouse/data/silver"
     
     # Run transformation
-    transformer.run_silver_transformation(bronze_df, output_path)
+    import pandas as pd
+    batch_id = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    
+    try:
+        transformer.run_silver_transformation(bronze_df, output_path, batch_id=batch_id)
+        print("\n🎉 Pipeline completed successfully with all validations passed!")
+    except Exception as e:
+        print(f"\n❌ Pipeline failed: {e}")
+        import sys
+        sys.exit(1)

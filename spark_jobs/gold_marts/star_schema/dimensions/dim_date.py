@@ -32,7 +32,7 @@ class DimDate:
 
         return dim_date
 
-    def save_date_dimension(self, dim_date: DataFrame, output_path: str):
+    def save_dimension(self, dim_date: DataFrame, output_path: str):
         dim_date.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(output_path)
         print(f"Date dimension saved to {output_path}")
         return dim_date

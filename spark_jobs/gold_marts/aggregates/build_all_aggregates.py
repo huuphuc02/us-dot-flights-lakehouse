@@ -63,7 +63,7 @@ class AggregateBuilder:
         fact_count = self.fact_flights.count()
         print(f"  → Cached {fact_count:,} fact records")
         if fact_count > 0:
-            self.save_sample(self.fact_flights, "fact_flights", 10)
+            self.save_sample(self.fact_flights, "fact_flights", 100)
         else:
             print("  ⚠️  WARNING: fact_flights is EMPTY!")
         
@@ -84,7 +84,7 @@ class AggregateBuilder:
         airline_count = self.dim_airline.count()
         print(f"  → dim_airline: {airline_count:,} records")
         if airline_count > 0:
-            self.save_sample(self.dim_airline, "dim_airline", 5)
+            self.save_sample(self.dim_airline, "dim_airline", 100)
         else:
             print("  ⚠️  WARNING: dim_airline is EMPTY!")
         
@@ -94,7 +94,7 @@ class AggregateBuilder:
         airport_count = self.dim_airport.count()
         print(f"  → dim_airport: {airport_count:,} records")
         if airport_count > 0:
-            self.save_sample(self.dim_airport, "dim_airport", 5)
+            self.save_sample(self.dim_airport, "dim_airport", 100)
         else:
             print("  ⚠️  WARNING: dim_airport is EMPTY!")
         
@@ -104,7 +104,7 @@ class AggregateBuilder:
         route_count = self.dim_route.count()
         print(f"  → dim_route: {route_count:,} records")
         if route_count > 0:
-            self.save_sample(self.dim_route, "dim_route", 5)
+            self.save_sample(self.dim_route, "dim_route", 50)
         else:
             print("  ⚠️  WARNING: dim_route is EMPTY!")
         
@@ -124,6 +124,13 @@ class AggregateBuilder:
             self.dim_airline
         )
         
+        # Show sample
+        print(f"\n  Sample daily_airline_performance:")
+        mart.show(5, truncate=False)
+        
+        # Save sample to file
+        self.save_sample(mart, "daily_airline_performance", 100)
+        
         output_path = f"{self.paths['gold']}/aggregates/daily_airline_performance"
         builder.save_mart(mart, output_path)
         print(f"  → Saved to {output_path}\n")
@@ -138,6 +145,13 @@ class AggregateBuilder:
             self.dim_date,
             self.dim_airport
         )
+        
+        # Show sample
+        print(f"\n  Sample daily_airport_performance:")
+        mart.show(5, truncate=False)
+        
+        # Save sample to file
+        self.save_sample(mart, "daily_airport_performance", 100)
         
         output_path = f"{self.paths['gold']}/aggregates/daily_airport_performance"
         builder.save_mart(mart, output_path)
@@ -154,6 +168,13 @@ class AggregateBuilder:
             self.dim_route,
             self.dim_airline
         )
+        
+        # Show sample
+        print(f"\n  Sample route_performance:")
+        mart.show(5, truncate=False)
+        
+        # Save sample to file
+        self.save_sample(mart, "route_performance", 100)
         
         output_path = f"{self.paths['gold']}/aggregates/route_performance"
         builder.save_mart(mart, output_path)

@@ -88,25 +88,27 @@ def configure_spark_for_azure(spark: SparkSession, config: AzureConfig):
 def create_spark_session_with_azure(app_name: str, azure_config: AzureConfig, master: str = "local[*]", memory: str = "4g"):
     """Create Spark session with Azure Data Lake support"""
     from pyspark.sql import SparkSession
-    from delta import configure_spark_with_delta_pip
+    
+    # Combine Delta and Azure packages in a single package list
+    # Delta Lake packages for Spark 3.5.0
+    # Azure Hadoop packages for ADLS access
+    all_packages = "io.delta:delta-core_2.12:2.4.0,org.apache.hadoop:hadoop-azure:3.3.4,com.microsoft.azure:azure-storage:8.6.6"
     
     builder = (SparkSession.builder
                .appName(app_name)
                .master(master)
                .config("spark.driver.memory", memory)
+               .config("spark.jars.packages", all_packages)
                .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
                .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
                .config("spark.sql.legacy.timeParserPolicy", "LEGACY")
                # Set timezone to UTC for consistent datetime handling
                .config("spark.sql.session.timeZone", "UTC")
-               .config("spark.jars",
-                "/Users/phuchuu/Desktop/libs/hadoop-azure-3.3.1.jar,"
-                "/Users/phuchuu/Desktop/libs/azure-storage-8.6.6.jar")
                # Azure compatibility settings
                .config(f"fs.azure.account.hns.enabled.{azure_config.storage_account_name}.dfs.core.windows.net", "false")
                .config(f"fs.azure.skipUserGroupMetadataCheck.{azure_config.storage_account_name}.dfs.core.windows.net", "true"))
     
-    spark = configure_spark_with_delta_pip(builder).getOrCreate()
+    spark = builder.getOrCreate()
     
     # Configure Azure authentication after session creation
     configure_spark_for_azure(spark, azure_config)

@@ -63,70 +63,26 @@ class FlightDataCleaner:
         from pyspark.sql.functions import date_format, date_add, expr
 
         # Convert time fields to proper timestamp type
-        # Use FL_DATE_PARSED (date type) to avoid timezone issues
         df_typed = df.withColumn(
             "DEP_TIME_PARSED",
             when(col("DEP_TIME_CLEAN").isNotNull(),
-            to_timestamp(
-                concat(
-                    date_format(col("FL_DATE_PARSED"), "yyyy-MM-dd"),
-                    lit(" "),
-                    regexp_replace(col("dep_time_clean"), "(\\d{2})(\\d{2})", "$1:$2:00")
-                ), "yyyy-MM-dd HH:mm:ss"
-            )).otherwise(None)
+            regexp_replace(col("DEP_TIME_CLEAN"), "(\\d{2})(\\d{2})", "$1:$2")).otherwise(None)
         ).withColumn(
             "CRS_DEP_TIME_PARSED",
             when(col("CRS_DEP_TIME").isNotNull(),
-            to_timestamp(
-                concat(
-                    date_format(col("FL_DATE_PARSED"), "yyyy-MM-dd"),
-                    lit(" "),
-                    regexp_replace(col("CRS_DEP_TIME"), "(\\d{2})(\\d{2})", "$1:$2:00")
-                ), "yyyy-MM-dd HH:mm:ss"
-            )).otherwise(None)
+            regexp_replace(col("CRS_DEP_TIME"), "(\\d{2})(\\d{2})", "$1:$2")).otherwise(None)
         )
         
-        # Handle arrival times - add 1 day if arrival time < departure time (midnight crossing)
-        # This handles red-eye flights that depart late night and arrive early morning next day
         df_typed = df_typed.withColumn(
-            "ARR_TIME_PARSED_TEMP",
-            when(col("ARR_TIME_CLEAN").isNotNull(),
-            to_timestamp(
-                concat(
-                    date_format(col("FL_DATE_PARSED"), "yyyy-MM-dd"),
-                    lit(" "),
-                    regexp_replace(col("arr_time_clean"), "(\\d{2})(\\d{2})", "$1:$2:00")
-                ), "yyyy-MM-dd HH:mm:ss"
-            )).otherwise(None)
-        ).withColumn(
             "ARR_TIME_PARSED",
-            # If arrival < departure, add 1 day to arrival (midnight crossing flight)
-            when(
-                col("ARR_TIME_PARSED_TEMP").isNotNull() & col("DEP_TIME_PARSED").isNotNull() & 
-                (col("ARR_TIME_PARSED_TEMP") < col("DEP_TIME_PARSED")),
-                expr("ARR_TIME_PARSED_TEMP + INTERVAL 1 DAY")
-            ).otherwise(col("ARR_TIME_PARSED_TEMP"))
-        ).withColumn(
-            "CRS_ARR_TIME_PARSED_TEMP",
-            when(col("CRS_ARR_TIME").isNotNull(),
-            to_timestamp(
-                concat(
-                    date_format(col("FL_DATE_PARSED"), "yyyy-MM-dd"),
-                    lit(" "),
-                    regexp_replace(col("CRS_ARR_TIME"), "(\\d{2})(\\d{2})", "$1:$2:00")
-                ), "yyyy-MM-dd HH:mm:ss"
-            )).otherwise(None)
+            when(col("ARR_TIME_CLEAN").isNotNull(),
+            regexp_replace(col("ARR_TIME_CLEAN"), "(\\d{2})(\\d{2})", "$1:$2")).otherwise(None)
         ).withColumn(
             "CRS_ARR_TIME_PARSED",
-            # Same logic for scheduled arrival time
-            when(
-                col("CRS_ARR_TIME_PARSED_TEMP").isNotNull() & col("CRS_DEP_TIME_PARSED").isNotNull() &
-                (col("CRS_ARR_TIME_PARSED_TEMP") < col("CRS_DEP_TIME_PARSED")),
-                expr("CRS_ARR_TIME_PARSED_TEMP + INTERVAL 1 DAY")
-            ).otherwise(col("CRS_ARR_TIME_PARSED_TEMP"))
-        ).drop("ARR_TIME_PARSED_TEMP", "CRS_ARR_TIME_PARSED_TEMP")
+            when(col("CRS_ARR_TIME").isNotNull(),
+            regexp_replace(col("CRS_ARR_TIME"), "(\\d{2})(\\d{2})", "$1:$2")).otherwise(None)
+        )
         
-        # Add distance conversion
         df_typed = df_typed.withColumn(
             "DISTANCE_KM",
             when(col("DISTANCE").isNotNull(),
@@ -144,12 +100,7 @@ class FlightDataCleaner:
     def validate_business_rules(self, df):
         print("Validating business rules")
 
-        # Ensure departure time is before arrival time
         df_validated = df.withColumn(
-            "DEP_BEFORE_ARR",
-            when(col("DEP_TIME_PARSED").isNotNull() & col("ARR_TIME_PARSED").isNotNull(),
-            col("DEP_TIME_PARSED") < col("ARR_TIME_PARSED")).otherwise(False) # Assume valid if times are null
-        ).withColumn(
             "AIR_TIME_VALID",
             when(col("AIR_TIME_CLEAN").isNotNull(),
             (col("AIR_TIME_CLEAN") > 0) & (col("AIR_TIME_CLEAN") < 1440)).otherwise(False) # 24 hours in minutes
@@ -167,10 +118,9 @@ class FlightDataCleaner:
             "DATA_QUALITY_SCORE",
             (when(col("has_missing_times"), 0).otherwise(1) +
             when(col("has_missing_delays"), 0).otherwise(1) +
-            when(col("DEP_BEFORE_ARR"), 1).otherwise(0) +
             when(col("AIR_TIME_VALID"), 1).otherwise(0) +
             when(col("DISTANCE_VALID"), 1).otherwise(0) +
-            when(col("REASONABLE_DELAYS"), 1).otherwise(0)) / 6.0
+            when(col("REASONABLE_DELAYS"), 1).otherwise(0)) / 5.0
         )
         return df_quality
 

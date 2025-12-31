@@ -90,7 +90,7 @@ class DimTime:
         
         return dim_time
 
-    def save_time_dimension(self, dim_time: DataFrame, output_path: str):
+    def save_dimension(self, dim_time: DataFrame, output_path: str):
         dim_time.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(output_path)
 
         print(f"Time dimension saved to {output_path}")

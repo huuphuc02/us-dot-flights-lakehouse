@@ -42,7 +42,7 @@ class DimRoute:
 
         return dim_route
 
-    def save_route_dimension(self, dim_route: DataFrame, output_path: str):
+    def save_dimension(self, dim_route: DataFrame, output_path: str):
         dim_route.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(output_path)
         print(f"Route dimension saved to {output_path}")
         return dim_route
